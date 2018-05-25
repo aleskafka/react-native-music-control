@@ -8,7 +8,11 @@
 
 @interface MusicControlManager ()
 
+@property (nonatomic, strong) NSDictionary *controlDict;
+@property (nonatomic, strong) NSMutableDictionary *mediaDict;
+@property (nonatomic, strong) NSArray *controls;
 @property (nonatomic, copy) NSString *artworkUrl;
+@property (nonatomic, copy) NSString *artworkCommited;
 @property (nonatomic, assign) BOOL audioInterruptionsObserved;
 
 @end
@@ -55,102 +59,89 @@ RCT_EXPORT_MODULE()
     return dispatch_get_main_queue();
 }
 
-RCT_EXPORT_METHOD(updatePlayback:(NSDictionary *) originalDetails)
+
+RCT_EXPORT_METHOD(updatePlaying:(NSDictionary *) state withDetails:(NSDictionary *) details withControls:(NSArray *)controls)
 {
-    MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
+    self.mediaDict = [NSMutableDictionary dictionary];
+    self.controls = controls;
 
-    if (center.nowPlayingInfo == nil) {
-        return;
+    for (NSString *key in MEDIA_DICT) {
+        if ([details objectForKey:key] != nil) {
+            [self.mediaDict setValue:[details objectForKey:key] forKey:[MEDIA_DICT objectForKey:key]];
+        }
+
+        if ([state objectForKey:key] != nil) {
+            [self.mediaDict setValue:[state objectForKey:key] forKey:[MEDIA_DICT objectForKey:key]];
+        }
     }
-
-    NSMutableDictionary *details = [originalDetails mutableCopy];
 
     // Set the playback rate from the state if no speed has been defined
     // If they provide the speed, then use it
-    if ([details objectForKey:MEDIA_STATE] != nil && [details objectForKey:MEDIA_SPEED] == nil) {
-        NSNumber *speed = [[details objectForKey:MEDIA_STATE] isEqual:MEDIA_STATE_PAUSED]
+    if ([state objectForKey:MEDIA_STATE] != nil && [state objectForKey:MEDIA_SPEED] == nil) {
+        NSNumber *speed = [[state objectForKey:MEDIA_STATE] isEqual:MEDIA_STATE_PAUSED]
         ? [NSNumber numberWithDouble:0]
         : [NSNumber numberWithDouble:1];
 
-        [details setValue:speed forKey:MEDIA_SPEED];
+        [self.mediaDict setValue:speed forKey:MEDIA_SPEED];
     }
 
-    NSMutableDictionary *mediaDict = [[NSMutableDictionary alloc] initWithDictionary: center.nowPlayingInfo];
-
-    center.nowPlayingInfo = [self update:mediaDict with:details andSetDefaults:false];
-
-    NSString *artworkUrl = [self getArtworkUrl:[originalDetails objectForKey:@"artwork"]];
-    if (artworkUrl != self.artworkUrl && artworkUrl != nil) {
-        self.artworkUrl = artworkUrl;
-        [self updateArtworkIfNeeded:artworkUrl];
-    }
-}
-
-
-RCT_EXPORT_METHOD(setNowPlaying:(NSDictionary *) details)
-{
     MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
-    NSMutableDictionary *mediaDict = [NSMutableDictionary dictionary];
-
-
-    center.nowPlayingInfo = [self update:mediaDict with:details andSetDefaults:true];
 
     NSString *artworkUrl = [self getArtworkUrl:[details objectForKey:@"artwork"]];
-    [self updateArtworkIfNeeded:artworkUrl];
+
+
+    if ([artworkUrl isEqual:self.artworkCommited]) {
+        if (center.nowPlayingInfo == nil) {
+            [self.mediaDict setValue:nil forKey:MPMediaItemPropertyArtwork];
+
+        } else {
+            NSMutableDictionary *nowPlayingInfo = [[NSMutableDictionary alloc] initWithDictionary: center.nowPlayingInfo];
+            [self.mediaDict setValue:[nowPlayingInfo objectForKey:MPMediaItemPropertyArtwork] forKey:MPMediaItemPropertyArtwork];
+        }
+
+        [self commitCenter];
+
+    } else {
+        self.artworkCommited = nil;
+
+        if (artworkUrl == nil || [artworkUrl isEqual: @""]) {
+            self.artworkUrl = nil;
+            [self.mediaDict setValue:nil forKey:MPMediaItemPropertyArtwork];
+            [self commitCenter];
+
+        } else if (self.artworkUrl != artworkUrl) {
+            self.artworkUrl = artworkUrl;
+            [self commitArtwork:artworkUrl];
+        }
+    }
 }
 
-RCT_EXPORT_METHOD(resetNowPlaying)
+RCT_EXPORT_METHOD(reset)
 {
+    self.artworkUrl = nil;
+    self.artworkCommited = nil;
+
+    for (NSString *key in self.controlDict) {
+        SEL handlerSEL = NSSelectorFromString([[self.controlDict objectForKey:key] objectForKey:@"selector"]);
+        [self toggleHandler:[[self.controlDict objectForKey:key] objectForKey:@"handler"] withSelector:handlerSEL enabled:false];
+    }
+
     MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
     center.nowPlayingInfo = nil;
-    self.artworkUrl = nil;
 }
 
 RCT_EXPORT_METHOD(enableControl:(NSString *) controlName enabled:(BOOL) enabled options:(NSDictionary *)options)
 {
-    MPRemoteCommandCenter *remoteCenter = [MPRemoteCommandCenter sharedCommandCenter];
+    NSDictionary *control = [self.controlDict objectForKey:controlName];
 
-    if ([controlName isEqual: @"pause"]) {
-        [self toggleHandler:remoteCenter.pauseCommand withSelector:@selector(onPause:) enabled:enabled];
-    } else if ([controlName isEqual: @"play"]) {
-        [self toggleHandler:remoteCenter.playCommand withSelector:@selector(onPlay:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"changePlaybackPosition"]) {
-        [self toggleHandler:remoteCenter.changePlaybackPositionCommand withSelector:@selector(onChangePlaybackPosition:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"stop"]) {
-        [self toggleHandler:remoteCenter.stopCommand withSelector:@selector(onStop:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"togglePlayPause"]) {
-        [self toggleHandler:remoteCenter.togglePlayPauseCommand withSelector:@selector(onTogglePlayPause:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"enableLanguageOption"]) {
-        [self toggleHandler:remoteCenter.enableLanguageOptionCommand withSelector:@selector(onEnableLanguageOption:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"disableLanguageOption"]) {
-        [self toggleHandler:remoteCenter.disableLanguageOptionCommand withSelector:@selector(onDisableLanguageOption:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"nextTrack"]) {
-        [self toggleHandler:remoteCenter.nextTrackCommand withSelector:@selector(onNextTrack:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"previousTrack"]) {
-        [self toggleHandler:remoteCenter.previousTrackCommand withSelector:@selector(onPreviousTrack:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"seekForward"]) {
-        [self toggleHandler:remoteCenter.seekForwardCommand withSelector:@selector(onSeekForward:) enabled:enabled];
-
-    } else if ([controlName isEqual: @"seekBackward"]) {
-        [self toggleHandler:remoteCenter.seekBackwardCommand withSelector:@selector(onSeekBackward:) enabled:enabled];
-    } else if ([controlName isEqual:@"skipBackward"]) {
-        if (options[@"interval"]) {
-            remoteCenter.skipBackwardCommand.preferredIntervals = @[options[@"interval"]];
+    if (control != nil) {
+        if ([control objectForKey:@"interval"] && options[@"interval"]) {
+            MPSkipIntervalCommand *handler = [control objectForKey:@"handler"];
+            handler.preferredIntervals = @[options[@"interval"]];
         }
-        [self toggleHandler:remoteCenter.skipBackwardCommand withSelector:@selector(onSkipBackward:) enabled:enabled];
-    } else if ([controlName isEqual:@"skipForward"]) {
-        if (options[@"interval"]) {
-            remoteCenter.skipForwardCommand.preferredIntervals = @[options[@"interval"]];
-        }
-        [self toggleHandler:remoteCenter.skipForwardCommand withSelector:@selector(onSkipForward:) enabled:enabled];
+
+        SEL handlerSEL = NSSelectorFromString([control objectForKey:@"selector"]);
+        [self toggleHandler:[control objectForKey:@"handler"] withSelector:handlerSEL enabled:enabled];
     }
 }
 
@@ -180,21 +171,71 @@ RCT_EXPORT_METHOD(observeAudioInterruptions:(BOOL) observe){
 
 #pragma mark internal
 
-- (NSDictionary *) update:(NSMutableDictionary *) mediaDict with:(NSDictionary *) details andSetDefaults:(BOOL) setDefault {
+- (id)init {
+    self = [super init];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(audioHardwareRouteChanged:) name:AVAudioSessionRouteChangeNotification object:nil];
+    self.audioInterruptionsObserved = false;
 
-    for (NSString *key in MEDIA_DICT) {
-        if ([details objectForKey:key] != nil) {
-            [mediaDict setValue:[details objectForKey:key] forKey:[MEDIA_DICT objectForKey:key]];
+    MPRemoteCommandCenter *remoteCenter = [MPRemoteCommandCenter sharedCommandCenter];
+
+    self.controlDict = @{
+        @"pause": @{
+            @"handler": remoteCenter.pauseCommand,
+            @"selector": NSStringFromSelector(@selector(onPause:))
+        },
+        @"play": @{
+            @"handler": remoteCenter.playCommand,
+            @"selector": NSStringFromSelector(@selector(onPlay:))
+        },
+        @"changePlaybackPosition": @{
+            @"handler": remoteCenter.changePlaybackPositionCommand,
+            @"selector": NSStringFromSelector(@selector(onChangePlaybackPosition:))
+        },
+        @"stop": @{
+            @"handler": remoteCenter.stopCommand,
+            @"selector": NSStringFromSelector(@selector(onStop:))
+        },
+        @"togglePlayPause": @{
+            @"handler": remoteCenter.togglePlayPauseCommand,
+            @"selector": NSStringFromSelector(@selector(onTogglePlayPause:))
+        },
+        @"enableLanguageOption": @{
+            @"handler": remoteCenter.enableLanguageOptionCommand,
+            @"selector": NSStringFromSelector(@selector(onEnableLanguageOption:))
+        },
+        @"disableLanguageOption": @{
+            @"handler": remoteCenter.disableLanguageOptionCommand,
+            @"selector": NSStringFromSelector(@selector(onDisableLanguageOption:))
+        },
+        @"nextTrack": @{
+            @"handler": remoteCenter.nextTrackCommand,
+            @"selector": NSStringFromSelector(@selector(onNextTrack:))
+        },
+        @"previousTrack": @{
+            @"handler": remoteCenter.previousTrackCommand,
+            @"selector": NSStringFromSelector(@selector(onPreviousTrack:))
+        },
+        @"seekForward": @{
+            @"handler": remoteCenter.seekForwardCommand,
+            @"selector": NSStringFromSelector(@selector(onSeekForward:))
+        },
+        @"seekBackward": @{
+            @"handler": remoteCenter.seekBackwardCommand,
+            @"selector": NSStringFromSelector(@selector(onSeekBackward:))
+        },
+        @"skipForward": @{
+            @"handler": remoteCenter.skipForwardCommand,
+            @"selector": NSStringFromSelector(@selector(onSkipForward:)),
+            @"interval": @YES
+        },
+        @"skipBackward": @{
+            @"handler": remoteCenter.skipBackwardCommand,
+            @"selector": NSStringFromSelector(@selector(onSkipBackward:)),
+            @"interval": @YES
         }
+    };
 
-        // In iOS Simulator, always include the MPNowPlayingInfoPropertyPlaybackRate key in your nowPlayingInfo dictionary
-        // only if we are creating a new dictionary
-        if ([key isEqualToString:MEDIA_SPEED] && [details objectForKey:key] == nil && setDefault) {
-            [mediaDict setValue:[NSNumber numberWithDouble:1] forKey:[MEDIA_DICT objectForKey:key]];
-        }
-    }
-
-    return mediaDict;
+    return self;
 }
 
 - (void) toggleHandler:(MPRemoteCommand *) command withSelector:(SEL) selector enabled:(BOOL) enabled {
@@ -203,13 +244,6 @@ RCT_EXPORT_METHOD(observeAudioInterruptions:(BOOL) observe){
         [command addTarget:self action:selector];
     }
     command.enabled = enabled;
-}
-
-- (id)init {
-    self = [super init];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(audioHardwareRouteChanged:) name:AVAudioSessionRouteChangeNotification object:nil];
-    self.audioInterruptionsObserved = false;
-    return self;
 }
 
 + (BOOL)requiresMainQueueSetup
@@ -223,21 +257,7 @@ RCT_EXPORT_METHOD(observeAudioInterruptions:(BOOL) observe){
 }
 
 - (void)stop {
-    MPRemoteCommandCenter *remoteCenter = [MPRemoteCommandCenter sharedCommandCenter];
-    [self resetNowPlaying];
-    [self toggleHandler:remoteCenter.pauseCommand withSelector:@selector(onPause:) enabled:false];
-    [self toggleHandler:remoteCenter.playCommand withSelector:@selector(onPlay:) enabled:false];
-    [self toggleHandler:remoteCenter.changePlaybackPositionCommand withSelector:@selector(onChangePlaybackPosition:) enabled:false];
-    [self toggleHandler:remoteCenter.stopCommand withSelector:@selector(onStop:) enabled:false];
-    [self toggleHandler:remoteCenter.togglePlayPauseCommand withSelector:@selector(onTogglePlayPause:) enabled:false];
-    [self toggleHandler:remoteCenter.enableLanguageOptionCommand withSelector:@selector(onEnableLanguageOption:) enabled:false];
-    [self toggleHandler:remoteCenter.disableLanguageOptionCommand withSelector:@selector(onDisableLanguageOption:) enabled:false];
-    [self toggleHandler:remoteCenter.nextTrackCommand withSelector:@selector(onNextTrack:) enabled:false];
-    [self toggleHandler:remoteCenter.previousTrackCommand withSelector:@selector(onPreviousTrack:) enabled:false];
-    [self toggleHandler:remoteCenter.seekForwardCommand withSelector:@selector(onSeekForward:) enabled:false];
-    [self toggleHandler:remoteCenter.seekBackwardCommand withSelector:@selector(onSeekBackward:) enabled:false];
-    [self toggleHandler:remoteCenter.skipBackwardCommand withSelector:@selector(onSkipBackward:) enabled:false];
-    [self toggleHandler:remoteCenter.skipForwardCommand withSelector:@selector(onSkipForward:) enabled:false];
+    [self reset];
     [self observeAudioInterruptions:false];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:AVAudioSessionRouteChangeNotification object:nil];
 }
@@ -283,56 +303,62 @@ RCT_EXPORT_METHOD(observeAudioInterruptions:(BOOL) observe){
    [self sendEventWithName:@"RNMusicControlEvent" body:@{@"name": event, @"value":value}];
 }
 
-- (void)updateArtworkIfNeeded:(id)artworkUrl
+- (void)commitCenter {
+    MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
+
+    center.nowPlayingInfo = self.mediaDict;
+
+    for (NSString *key in self.controlDict) {
+        [self enableControl:key enabled:[self.controls containsObject:key] options:nil];
+    }
+}
+
+- (void)commitArtwork:(id)artworkUrl
 {
-    if (artworkUrl != nil) {
-        self.artworkUrl = artworkUrl;
-
-        // Custom handling of artwork in another thread, will be loaded async
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-            UIImage *image = nil;
-
-            // check whether artwork path is present
-            if (![artworkUrl isEqual: @""]) {
-                // artwork is url download from the interwebs
-                if ([artworkUrl hasPrefix: @"http://"] || [artworkUrl hasPrefix: @"https://"]) {
-                    NSURL *imageURL = [NSURL URLWithString:artworkUrl];
-                    NSData *imageData = [NSData dataWithContentsOfURL:imageURL];
-                    image = [UIImage imageWithData:imageData];
-                } else {
-                    NSString *localArtworkUrl = [artworkUrl stringByReplacingOccurrencesOfString:@"file://" withString:@""];
-                    BOOL fileExists = [[NSFileManager defaultManager] fileExistsAtPath:localArtworkUrl];
-                    if (fileExists) {
-                        image = [UIImage imageNamed:localArtworkUrl];
-                    }
-                }
+    // Custom handling of artwork in another thread, will be loaded async
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
+        UIImage *image = nil;
+        // artwork is url download from the interwebs
+        if ([artworkUrl hasPrefix: @"http://"] || [artworkUrl hasPrefix: @"https://"]) {
+            NSURL *imageURL = [NSURL URLWithString:artworkUrl];
+            NSData *imageData = [NSData dataWithContentsOfURL:imageURL];
+            image = [UIImage imageWithData:imageData];
+        } else {
+            NSString *localArtworkUrl = [artworkUrl stringByReplacingOccurrencesOfString:@"file://" withString:@""];
+            BOOL fileExists = [[NSFileManager defaultManager] fileExistsAtPath:localArtworkUrl];
+            if (fileExists) {
+                image = [UIImage imageNamed:localArtworkUrl];
             }
+        }
 
-            // Check if image was available otherwise don't do anything
-            if (image == nil) {
-                return;
-            }
-
+        if (image != nil) {
             // check whether image is loaded
             CGImageRef cgref = [image CGImage];
             CIImage *cim = [image CIImage];
 
-            if (cim != nil || cgref != NULL) {
-
-                dispatch_async(dispatch_get_main_queue(), ^{
-
-                    // Check if URL wasn't changed in the meantime
-                    if ([artworkUrl isEqual:self.artworkUrl]) {
-                        MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
-                        MPMediaItemArtwork *artwork = [[MPMediaItemArtwork alloc] initWithImage: image];
-                        NSMutableDictionary *mediaDict = (center.nowPlayingInfo != nil) ? [[NSMutableDictionary alloc] initWithDictionary: center.nowPlayingInfo] : [NSMutableDictionary dictionary];
-                        [mediaDict setValue:artwork forKey:MPMediaItemPropertyArtwork];
-                        center.nowPlayingInfo = mediaDict;
-                    }
-                });
+            if (cim == nil && cgref == NULL) {
+                image = nil;
             }
-        });
-    }
+        }
+
+        MPMediaItemArtwork *artwork = nil;
+
+        if (image != nil) {
+            artwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:CGSizeMake(600, 600) requestHandler:^UIImage * _Nonnull(CGSize size) {
+                UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+                [image drawInRect:CGRectMake(0, 0, size.width, size.height)];
+                UIImage *newImage = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                return newImage;
+            }];
+        }
+
+        if ([artworkUrl isEqual:self.artworkUrl]) {
+            self.artworkCommited = artworkUrl;
+            [self.mediaDict setValue:artwork forKey:MPMediaItemPropertyArtwork];
+            [self commitCenter];
+        }
+    });
 }
 
 - (void)audioHardwareRouteChanged:(NSNotification *)notification {

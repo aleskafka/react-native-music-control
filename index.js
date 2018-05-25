@@ -34,23 +34,16 @@ const MusicControl = {
   enableBackgroundMode: function(enable) {
     NativeMusicControl.enableBackgroundMode(enable);
   },
-  setNowPlaying: function(info) {
+  updatePlaying: function(state, details, controls=[]) {
     // Check if we have an android asset from react style image require
-    if (info.artwork) {
-      info.artwork = resolveAssetSource(info.artwork) || info.artwork;
+    if (details.artwork) {
+      details.artwork = resolveAssetSource(details.artwork) || details.artwork;
     }
 
-    NativeMusicControl.setNowPlaying(info);
+    NativeMusicControl.updatePlaying(state, details, controls);
   },
-  setPlayback: function(info) {
-    // Backwards compatibility. Use updatePlayback instead.
-    NativeMusicControl.updatePlayback(info);
-  },
-  updatePlayback: function(info) {
-    NativeMusicControl.updatePlayback(info);
-  },
-  resetNowPlaying: function() {
-    NativeMusicControl.resetNowPlaying();
+  reset: function() {
+    NativeMusicControl.reset();
   },
   enableControl: function(controlName, enable, options = {}) {
     NativeMusicControl.enableControl(controlName, enable, options || {});
